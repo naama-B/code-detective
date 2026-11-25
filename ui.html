@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #f6f5f2; --card: #ffffff; --ink: #1d1c1a; --ink2: #5b5a56; --line: #e4e2dc;
+    --accent: #2a78d6; --error: #d64545; --good: #1a8f63; --code-bg: #1f2430; --code-ink: #e8e6df;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font-family: "Segoe UI", "Arial", sans-serif; font-size: 15px; line-height: 1.55; }
+  header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px;
+           padding: 12px 16px; background: var(--card); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 17px; margin: 0; flex: 1; }
+  header .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good); }
+  header button { font-size: 13px; }
+  main { padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+  .empty { text-align: center; color: var(--ink2); margin-top: 60px; }
+  .empty .big { font-size: 40px; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+          padding: 14px 16px; box-shadow: 0 1px 3px rgba(0,0,0,.05); animation: pop .25s ease-out; }
+  @keyframes pop { from { transform: translateY(-6px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .top { display: flex; align-items: center; gap: 8px; }
+  .badge { background: #fdecec; color: var(--error); font-weight: 600; border-radius: 6px;
+           padding: 2px 8px; direction: ltr; unicode-bidi: isolate; }
+  .time { color: var(--ink2); font-size: 13px; margin-inline-start: auto; }
+  .x { border: none; background: none; color: var(--ink2); cursor: pointer; font-size: 16px; padding: 0 4px; }
+  .meta { color: var(--ink2); font-size: 13px; margin-top: 6px; }
+  .ltr { direction: ltr; unicode-bidi: isolate; font-family: Consolas, monospace; }
+  h3 { font-size: 14px; margin: 12px 0 4px; color: var(--ink2); }
+  p { margin: 0; }
+
+  .buttons { display: flex; gap: 8px; margin-top: 14px; }
+  button { font-family: inherit; font-size: 14px; border-radius: 8px; padding: 8px 12px; cursor: pointer;
+           border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .buttons button { flex: 1; }
+
+  .result { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 4px; }
+  .hint { background: #fff8e6; border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
+  pre { direction: ltr; text-align: left; background: var(--code-bg); color: var(--code-ink);
+        border-radius: 8px; padding: 10px 12px; margin: 4px 0 0; white-space: pre-wrap;
+        font-family: Consolas, monospace; font-size: 13.5px; position: relative; }
+  pre.old { opacity: .75; text-decoration: line-through; text-decoration-color: #ff8a8a; }
+  .copy { position: absolute; top: 6px; right: 6px; font-size: 12px; padding: 2px 8px;
+          background: #39404f; color: #fff; border: none; }
+  .loading { color: var(--ink2); margin-top: 12px; }
+  .loading::after { content: "…"; animation: dots 1s steps(3) infinite; }
+  @keyframes dots { 0% { content: "."; } 50% { content: ".."; } 100% { content: "..."; } }
+  .failed { border-color: #f3c4c4; }
+  .done { opacity: .6; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" title="הסוכן פעיל"></span>
+  <h1>🔍 Code Detective</h1>
+  <button onclick="if (confirm('לכבות את הסוכן? הוא יופעל שוב כשתפתחי חלון PowerShell חדש.')) pywebview.api.quit()">כיבוי</button>
+</header>
+<main id="cards">
+  <div class="empty" id="empty">
+    <div class="big">🎉</div>
+    <p>אין שגיאות כרגע.</p>
+    <p>עבדי ב-PowerShell כרגיל, ואני אקפוץ כשמשהו ייכשל.</p>
+  </div>
+</main>
+
+<script>
+// ---------- small helpers ----------
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v);
+  }
+  for (const c of children) node.append(c);   // text is added as text (safe, no HTML injection)
+  return node;
+}
+function codeBlock(text, extraClass = "") {
+  const copy = el("button", { class: "copy", onclick: () => window.pywebview.api.copy(text) }, "העתקה");
+  return el("pre", { class: extraClass }, copy, text);
+}
+function addToTop(card) {
+  document.getElementById("empty").style.display = "none";
+  document.getElementById("cards").prepend(card);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function placeCard(card, id) {
+  // If a "still analyzing" card with this id is already shown, replace it; otherwise add a new one on top
+  card.dataset.id = id;
+  const old = document.querySelector(`[data-id="${id}"]`);
+  if (old) old.replaceWith(card); else addToTop(card);
+}
+function closeButton(card) {
+  return el("button", { class: "x", title: "הסרה", onclick: () => card.remove() }, "✕");
+}
+
+// ---------- called from Python: an error was found, the explanation is not ready yet ----------
+function addPendingCard(d) {
+  const card = el("div", { class: "card" });
+  card.append(
+    el("div", { class: "top" }, el("span", { class: "badge" }, "❌ נמצאה שגיאה"),
+       el("span", { class: "time" }, d.time), closeButton(card)),
+    el("div", { class: "meta" }, "פקודה: ", el("span", { class: "ltr" }, d.command)),
+    el("div", { class: "loading" }, "מנתחת את השגיאה"));
+  placeCard(card, d.id);
+}
+
+// ---------- called from Python: the explanation is ready ----------
+function addCard(d) {
+  const card = el("div", { class: "card" });
+  const where = d.file ? el("span", {}, "📄 ", el("span", { class: "ltr" }, d.file), ` · שורה ${d.line}`)
+                       : el("span", {}, "📁 ", el("span", { class: "ltr" }, d.cwd));
+  const btnSelf = el("button", {}, "💪 אתקן לבד");
+  const btnFix = el("button", { class: "primary" }, "🔧 תביאי פתרון");
+  const result = el("div");
+
+  async function choose(mode) {
+    btnSelf.disabled = btnFix.disabled = true;
+    result.replaceChildren(el("div", { class: "loading" }, mode === "self" ? "מכינה רמז" : "מכינה פתרון"));
+    const r = await window.pywebview.api.choose(d.id, mode);
+    if (!r || !r.ok) {
+      result.replaceChildren(el("p", { class: "loading" }, "משהו השתבש. נסי שוב בעוד רגע."));
+      btnSelf.disabled = btnFix.disabled = false;
+      return;
+    }
+    if (r.mode === "self") {
+      result.replaceChildren(el("div", { class: "result" },
+        el("h3", {}, "💡 רמז"), el("div", { class: "hint" }, r.hint)));
+    } else {
+      const parts = [el("h3", {}, "🔧 הפתרון")];
+      if (r.file) parts.push(el("p", { class: "meta" }, "📄 ", el("span", { class: "ltr" }, r.file), ` · שורה ${r.line}`));
+      parts.push(el("h3", {}, "עכשיו כתוב:"), codeBlock(r.current_code, "old"),
+                 el("h3", {}, "להחליף ב:"), codeBlock(r.new_code),
+                 el("h3", {}, "למה זה עובד?"), el("p", {}, r.why_it_works));
+      result.replaceChildren(el("div", { class: "result" }, ...parts));
+    }
+    card.querySelector(".buttons").remove();
+  }
+  btnSelf.addEventListener("click", () => choose("self"));
+  btnFix.addEventListener("click", () => choose("solution"));
+
+  card.append(
+    el("div", { class: "top" }, el("span", { class: "badge" }, "❌ " + d.error_type),
+       el("span", { class: "time" }, d.time), closeButton(card)),
+    el("div", { class: "meta" }, "פקודה: ", el("span", { class: "ltr" }, d.command)),
+    el("div", { class: "meta" }, where),
+    el("h3", {}, "מה קרה?"), el("p", {}, d.explanation),
+    el("div", { class: "buttons" }, btnSelf, btnFix),
+    result);
+  placeCard(card, d.id);
+}
+
+// ---------- called from Python: the analysis itself failed (for example, the server is busy) ----------
+function addFailedCard(d) {
+  const card = el("div", { class: "card failed" });
+  card.append(
+    el("div", { class: "top" }, el("span", { class: "badge" }, "⚠️ לא הצלחתי לנתח"),
+       el("span", { class: "time" }, d.time), closeButton(card)),
+    el("div", { class: "meta" }, "פקודה: ", el("span", { class: "ltr" }, d.command)),
+    el("p", { style: "margin-top:8px" }, "הייתה שגיאה, אבל לא הצלחתי לנתח אותה (אולי השרת עמוס). אפשר להריץ שוב את הפקודה."));
+  placeCard(card, d.id);
+}
+</script>
+</body>
+</html>
